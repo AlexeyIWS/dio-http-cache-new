@@ -39,25 +39,20 @@ class DioCacheManager {
   }
 
   _onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
-    if ((options.extra[DIO_CACHE_KEY_TRY_CACHE] ?? false) != true) {
-      return handler.next(options);
-    }
     if (true == options.extra[DIO_CACHE_KEY_FORCE_REFRESH]) {
       return handler.next(options);
     }
-    var responseDataFromCache = await _pullFromCacheBeforeMaxAge(options);
-    if (null != responseDataFromCache) {
-      return handler.resolve(
-          _buildResponse(
-              responseDataFromCache, responseDataFromCache.statusCode, options),
-          true);
+    try {
+      final response = await _fetchCacheResponse(options, _pullFromCacheBeforeMaxAge);
+      if (response != null) return handler.resolve(response);
+    } catch (e) {
+      return handler.reject(DioError(requestOptions: options, error: e));
     }
     return handler.next(options);
   }
 
   _onResponse(Response response, ResponseInterceptorHandler handler) async {
-    if ((response.requestOptions.extra[DIO_CACHE_KEY_TRY_CACHE] ?? false) ==
-            true &&
+    if ((response.requestOptions.extra[DIO_CACHE_KEY_TRY_CACHE] ?? false) == true &&
         response.statusCode != null &&
         response.statusCode! >= 200 &&
         response.statusCode! < 300) {
@@ -66,22 +61,29 @@ class DioCacheManager {
     return handler.next(response);
   }
 
-  _onError(DioError e, ErrorInterceptorHandler handler) async {
-    if ((e.requestOptions.extra[DIO_CACHE_KEY_TRY_CACHE] ?? false) == true) {
-      var responseDataFromCache =
-          await _pullFromCacheBeforeMaxStale(e.requestOptions);
-      if (null != responseDataFromCache) {
-        var response = _buildResponse(responseDataFromCache,
-            responseDataFromCache.statusCode, e.requestOptions);
-
-        return handler.resolve(response);
-      }
+  _onError(DioError error, ErrorInterceptorHandler handler) async {
+    try {
+      final response = await _fetchCacheResponse(error.requestOptions, _pullFromCacheBeforeMaxStale);
+      if (response != null) return handler.resolve(response);
+    } catch (e) {
+      return handler.reject(DioError(requestOptions: error.requestOptions, error: e));
     }
-    return handler.next(e);
+    return handler.next(error);
   }
 
-  Response _buildResponse(
-      CacheObj obj, int? statusCode, RequestOptions options) {
+  Future<Response?> _fetchCacheResponse(
+      RequestOptions options,
+      Future<CacheObj?> Function(RequestOptions options) pullFromCache) async {
+    if ((options.extra[DIO_CACHE_KEY_TRY_CACHE] ?? false) == true) {
+      var responseDataFromCache = await pullFromCache(options);
+      if (null != responseDataFromCache) {
+        return _buildResponse(responseDataFromCache, responseDataFromCache.statusCode, options);
+      }
+    }
+    return null;
+  }
+
+  Response _buildResponse(CacheObj obj, int? statusCode, RequestOptions options) {
     Headers? headers;
     if (null != obj.headers) {
       headers = Headers.fromMap((Map<String, List<dynamic>>.from(
